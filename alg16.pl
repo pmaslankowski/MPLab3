@@ -9,12 +9,12 @@ lexer(Tokens) -->
         ; "+",      !, {Token = tokPlus}
         ; "-",      !, {Token = tokMinus}
         ; "*",      !, {Token = tokTimes}
+        ; "<>",     !, {Token = tokNeq}
         ; "<",      !, {Token = tokLt}
         ; "<=",     !, {Token = tokLeq}
         ; ">",      !, {Token = tokGt}
         ; ">=",     !, {Token = tokGeq}
         ; "=",      !, {Token = tokEq}
-        ; "<>",     !, {Token = tokNeq}
         ; ":=",     !, {Token = tokAssgn}
         ; ",",      !, {Token = tokComma}
         ; "(",      !, {Token = tokLParen}
@@ -111,7 +111,7 @@ declarations([]) -->
 
 declaration(Vars) -->
     declarator(Vars), !.
-declaration(Procedure) -->
+declaration([Procedure]) -->
     procedure(Procedure).
 
 declarator(Vars) -->
@@ -136,6 +136,8 @@ formalArgs([]) -->
 
 formalArgsSequence([arg(Arg)|Args]) -->
     formalArg(Arg), [tokComma], !, formalArgsSequence(Args).
+formalArgsSequence([arg(Arg)]) -->
+    formalArg(Arg), !.
 formalArgsSequence([]) -->
     [].
 
@@ -151,12 +153,10 @@ complexInstr(Instr) -->
     instr(Instr).
 
 instr(Instr) -->
-    ( variable(Var), !, [tokAssgn], arith_expr(Ar_Expr),
-      {Instr = (Var := Ar_Expr)}
-    ; [tokIf], logicExpr(L_Expr), [tokThen], complexInstr(ThenPart), [tokFi], !,
-      {Instr = if(L_Expr, ThenPart, emptyInstr)}
-    ; [tokIf], logicExpr(L_Expr), [tokThen], complexInstr(ThenPart), [tokElse], complexInstr(ElsePart), [tokFi],
-      {Instr = if(L_Expr, ThenPart, ElsePart)}
+    (
+    [tokIf], !, logicExpr(L_Expr), [tokThen], complexInstr(ThenPart),
+        ( [tokFi], !, {Instr = if(L_Expr, ThenPart, emptyInstr)}
+        ; [tokThen], complexInstr(ElsePart), {Instr = if(L_Expr, ThenPart, ElsePart)})
     ; [tokWhile], !, logicExpr(L_Expr), [tokDo], complexInstr(Body), [tokDone],
       {Instr = while(L_Expr, Body)}
     ; [tokCall], !, procCall(Proc),
@@ -165,8 +165,10 @@ instr(Instr) -->
       {Instr = return(Expr)}
     ; [tokRead], !, variable(Var),
       {Instr = read(Var)}
-    ; [tokWrite], arith_expr(Expr),
+    ; [tokWrite], !, arith_expr(Expr),
       {Instr = write(Expr)}
+    ; variable(Var),  [tokAssgn], arith_expr(Ar_Expr),
+      {Instr = (Var := Ar_Expr)}
     ).
 
 arith_expr(Expr) -->
@@ -209,22 +211,74 @@ simple_expr(Expr) -->
     atom_expr(Expr).
 
 atom_expr(X) -->
-    ( variable(X), !
-    ; procCall(X), !
+    ( procCall(X), !
+    ; variable(X), !
     ; [tokNumber(Y)], {X = const(Y)}
     ).
 
 procCall(X) -->
     [ProcName], {ProcName = tokId(Name)}, [tokLParen], realArgs(Args), [tokRParen],
-    {X = callProc(Name, Args)}.
+    {X = call(Name, Args)}.
 
+realArgs([Arg|Args]) -->
+    realArg(Arg), [tokComma], !, realArgs(Args).
+realArgs([Arg]) -->
+    realArg(Arg), !.
+realArgs([]) -->
+    [].
 
+realArg(Arg) -->
+    arith_expr(Arg).
+
+logicExpr(Bool) -->
+    disjunct(Disjunct), logicExpr(Disjunct, Bool).
+
+logicExpr(Acc, Bool) -->
+    [tokOr], !, disjunct(Disjunct),
+    {Acc1 =.. [or, Acc, Disjunct]},
+    logicExpr(Acc1, Bool).
+logicExpr(Acc, Acc) -->
+    [].
+
+disjunct(Disjunct) -->
+    conjunct(Conjunct), disjunct(Conjunct, Disjunct).
+
+disjunct(Acc, Disjunct) -->
+    [tokAnd], !, conjunct(Conjunct),
+    {Acc1 =.. [and, Acc, Conjunct]},
+    disjunct(Acc1, Disjunct).
+disjunct(Acc, Acc) -->
+    [].
+
+conjunct(Conjunct) -->
+    ( [tokNot], !, relExpr(Expr), {Conjunct = not(Expr)}
+    ; relExpr(Conjunct) ).
+
+relExpr(Expr) -->
+    ( arith_expr(LExpr), !, rel_op(Op), arith_expr(RExpr),
+      {Expr =.. [Op, LExpr, RExpr]}
+    ; [tokLParen], logicExpr(Expr), [tokRParen] ).
+
+rel_op(<>) -->
+    [tokNeq].
+rel_op(<) -->
+    [tokLt], !.
+rel_op(<=) -->
+    [tokLeq], !.
+rel_op(>) -->
+    [tokGt], !.
+rel_op(>=) -->
+    [tokGeq], !.
+rel_op(=) -->
+    [tokEq], !.
 
 %TESTING: reading code from file
-test(Filename, Program) :-
+test(Filename, AST) :-
     open(Filename, read, Str),
     readProgram(Str, Program),
-    write(Program), nl,
+    phrase(lexer(TokList), Program),
+    phrase(program(AST), TokList),
+    write(AST), nl,
     close(Str).
 
 readProgram(In, []) :-
