@@ -1,0 +1,12 @@
+program gcd
+    local x, y, t
+begin
+    read x;
+    read y;
+    while y <> 0 do
+        t:= x mod y;
+        y := x;
+        x := t
+    done;
+    write y
+end

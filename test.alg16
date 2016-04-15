@@ -1,0 +1,6 @@
+program Test
+	local x
+begin
+	x:=3;
+	write sum (n*n + 1, n)
+end
