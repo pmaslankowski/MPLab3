@@ -78,7 +78,7 @@ letter(X) -->
     [X], {code_type(X, alpha)}.
 
 alphanum([H|T]) -->
-    [H], {code_type(H, alnum)}, !,  alphanum(T).
+    [H], {code_type(H, alnum) ; H = '_'}, !,  alphanum(T).
 alphanum([]) -->
     [].
 
@@ -100,19 +100,17 @@ program(AST) -->
     [tokProgram], [TokId], block(Block), {TokId = tokId(Id), AST = program(Id, Block)}.
 
 block(Block) -->
-    declarations(Declarations), [tokBegin], complexInstr(ComplexInstr), [tokEnd],
-    {Block = block(Declarations, ComplexInstr)}.
+    declarations(Vars, Procds), [tokBegin], complexInstr(ComplexInstr), [tokEnd],
+    {Block = block(Vars, Procds, ComplexInstr)}.
 
-declarations(Declarations) -->
-    declaration(Declaration), !, declarations(Other),
-    {append(Declaration, Other, Declarations)}.
-declarations([]) -->
+declarations(Vars, Procds) -->
+    declarator(Vars), !, declarations(Other, Procds),
+    {append(Vars, Other, Vars)}.
+declarations(Vars, Procds) -->
+    procedure(Procedure), !, declarations(Vars, Other),
+    {append([Procedure], Other, Procds)}.
+declarations([], []) -->
     [].
-
-declaration(Vars) -->
-    declarator(Vars), !.
-declaration([Procedure]) -->
-    procedure(Procedure).
 
 declarator(Vars) -->
     [tokLocal], variables(Vars).
@@ -134,16 +132,16 @@ formalArgs(FormalArgs) -->
 formalArgs([]) -->
     [].
 
-formalArgsSequence([arg(Arg)|Args]) -->
+formalArgsSequence([Arg|Args]) -->
     formalArg(Arg), [tokComma], !, formalArgsSequence(Args).
-formalArgsSequence([arg(Arg)]) -->
+formalArgsSequence([Arg]) -->
     formalArg(Arg), !.
 formalArgsSequence([]) -->
     [].
 
 formalArg(by_val(Var)) -->
     [tokValue], !, variable(Var).
-formalArg(Arg) -->
+formalArg(arg(Arg)) -->
     variable(Arg).
 
 complexInstr(CmpInstr) -->
@@ -260,7 +258,7 @@ relExpr(Expr) -->
     ; [tokLParen], logicExpr(Expr), [tokRParen] ).
 
 rel_op(<>) -->
-    [tokNeq].
+    [tokNeq], !.
 rel_op(<) -->
     [tokLt], !.
 rel_op(<=) -->
@@ -272,6 +270,90 @@ rel_op(>=) -->
 rel_op(=) -->
     [tokEq], !.
 
+%VALIDATING SEMANTICS - NAMESPACES OF VARIABLES AND PROCEDURES
+vArithExpr(Expr, Gamma) :-
+    (OP = + ; OP = -; OP = *; OP = div; OP = mod),
+    Expr =.. [OP, L, R], !,
+    vArithExpr(L, Gamma),
+    vArithExpr(R, Gamma).
+vArithExpr(var(X), Gamma) :-
+    findVar(X, Gamma, Path),
+    X = Path, nl.
+vArithExpr(call(X, Args), Gamma) :-
+    length(Args, CountArgs),
+    findCall(X, CountArgs, Gamma, Path),
+    vArgs(Args, Gamma).
+vArithExpr(const(_), _).
+
+vLogicExpr(Expr, Gamma) :-
+    (OP = and; OP = or; OP = not),
+    Expr =.. [OP, L, R], !,
+    vLogicExpr(L, Gamma),
+    vLogicExpr(R, Gamma).
+vLogicExpr(Expr, Gamma) :-
+    (OP = <>; OP = <=; OP = <; OP = >; OP = >=; OP = (=)),
+    Expr =.. [OP, L, R], !,
+    vArithExpr(L, Gamma),
+    vArithExpr(R, Gamma).
+
+vArgs([], _).
+vArgs([H|T], Gamma) :-
+    vArithExpr(H, Gamma),
+    vArgs(T, Gamma).
+
+vInstr(if(Condition, Then, Else), Gamma) :-
+    !,vLogicExpr(Condition, Gamma),
+    vInstrs(Then, Gamma),
+    vInstrs(Else, Gamma).
+vInstr(while(Condition, Instrs), Gamma) :-
+    !,vLogicExpr(Condition, Gamma),
+    vInstrs(Instrs, Gamma).
+vInstr(call(Name, Args), Gamma) :-
+    !,length(Args, CountArgs),
+    findCall(Name, CountArgs, Gamma, Path),
+    %Name = Path,
+    vArgs(Args, Gamma).
+vInstr(return(Expr), Gamma) :-
+    !,vArithExpr(Expr, Gamma).
+vInstr(write(Expr), Gamma) :-
+    !,vArithExpr(Expr, Gamma).
+vInstr(read(var(X)), Gamma) :-
+    !,findVar(X, Gamma, Path),
+    X = Path.
+vInstr(var(X) := Expr, Gamma) :-
+    !,findVar(X, Gamma, Path),
+    X = Path,
+    vArithExpr(Expr, Gamma).
+vInstr(emptyInstr, _).
+
+vInstrs(Instr ';;' Instrs, Gamma) :-
+    !, vInstr(Instr, Gamma),
+    vInstrs(Instrs, Gamma).
+vInstrs(Instr, Gamma) :-
+    vInstr(Instr, Gamma).
+
+vProcds([], Gamma, Gamma).
+vProcds([procedure(Name, Args, Block)|T], Gamma, NewGamma) :-
+    length(Args, CountArgs),
+    append(Args, [rec(Name, CountArgs)|Gamma], TmpGamma),
+    vBlock(Block, TmpGamma),
+    vProcds(T, [proc(Name, CountArgs)|Gamma], NewGamma).
+
+vBlock(block(Vars, Procds, Instrs), Gamma) :-
+    append(Vars, Gamma, NewGamma),
+    vProcds(Procds, NewGamma, NewGamma2),
+    vInstrs(Instrs, NewGamma2).
+
+vProgram(program(_, Block)) :-
+    vBlock(Block, []).
+
+findVar(X, Gamma, Path) :-
+    write(X), write(Gamma), nl.
+
+findCall(X, CountArgs, Gamma, Path) :-
+    write((X, CountArgs)), write(Gamma), nl.
+
+
 %TESTING: reading code from file
 test(Filename, AST) :-
     open(Filename, read, Str),
@@ -279,6 +361,7 @@ test(Filename, AST) :-
     phrase(lexer(TokList), Program),
     phrase(program(AST), TokList),
     write(AST), nl,
+    vProgram(AST),
     close(Str).
 
 readProgram(In, []) :-
