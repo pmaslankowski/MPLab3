@@ -100,17 +100,19 @@ program(AST) -->
     [tokProgram], [TokId], block(Block), {TokId = tokId(Id), AST = program(Id, Block)}.
 
 block(Block) -->
-    declarations(Vars, Procds), [tokBegin], complexInstr(ComplexInstr), [tokEnd],
-    {Block = block(Vars, Procds, ComplexInstr)}.
+    declarations(Decs), [tokBegin], complexInstr(ComplexInstr), [tokEnd],
+    {Block = block(Decs, ComplexInstr)}.
 
-declarations(Vars, Procds) -->
-    declarator(Vars), !, declarations(Other, Procds),
-    {append(Vars, Other, Vars)}.
-declarations(Vars, Procds) -->
-    procedure(Procedure), !, declarations(Vars, Other),
-    {append([Procedure], Other, Procds)}.
-declarations([], []) -->
+declarations(Declarations) -->
+    declaration(Declaration), !, declarations(Other),
+    {append(Declaration, Other, Declarations)}.
+declarations([]) -->
     [].
+
+declaration(Vars) -->
+    declarator(Vars), !.
+declaration([Procedure]) -->
+    procedure(Procedure).
 
 declarator(Vars) -->
     [tokLocal], variables(Vars).
@@ -277,11 +279,12 @@ vArithExpr(Expr, Gamma) :-
     vArithExpr(L, Gamma),
     vArithExpr(R, Gamma).
 vArithExpr(var(X), Gamma) :-
-    findVar(X, Gamma, Path),
-    X = Path, nl.
+    findVar(X, Gamma, Path), %HERE
+    write(Path), nl.
 vArithExpr(call(X, Args), Gamma) :-
     length(Args, CountArgs),
-    findCall(X, CountArgs, Gamma, Path),
+    findCall(X, CountArgs, Gamma, Path), %HERE
+    write(Path),
     vArgs(Args, Gamma).
 vArithExpr(const(_), _).
 
@@ -310,19 +313,19 @@ vInstr(while(Condition, Instrs), Gamma) :-
     vInstrs(Instrs, Gamma).
 vInstr(call(Name, Args), Gamma) :-
     !,length(Args, CountArgs),
-    findCall(Name, CountArgs, Gamma, Path),
-    %Name = Path,
+    findCall(Name, CountArgs, Gamma, Path), %HERE
+    write(Path),
     vArgs(Args, Gamma).
 vInstr(return(Expr), Gamma) :-
     !,vArithExpr(Expr, Gamma).
 vInstr(write(Expr), Gamma) :-
     !,vArithExpr(Expr, Gamma).
 vInstr(read(var(X)), Gamma) :-
-    !,findVar(X, Gamma, Path),
-    X = Path.
+    !,findVar(X, Gamma, Path), %HERE
+    write(Path), nl.
 vInstr(var(X) := Expr, Gamma) :-
     !,findVar(X, Gamma, Path),
-    X = Path,
+    write(Path), nl,
     vArithExpr(Expr, Gamma).
 vInstr(emptyInstr, _).
 
@@ -339,19 +342,41 @@ vProcds([procedure(Name, Args, Block)|T], Gamma, NewGamma) :-
     vBlock(Block, TmpGamma),
     vProcds(T, [proc(Name, CountArgs)|Gamma], NewGamma).
 
-vBlock(block(Vars, Procds, Instrs), Gamma) :-
-    append(Vars, Gamma, NewGamma),
-    vProcds(Procds, NewGamma, NewGamma2),
-    vInstrs(Instrs, NewGamma2).
+vBlock(block(Decs, Instrs), Gamma) :-
+    vDecs(Decs, Gamma, NewGamma),
+    vInstrs(Instrs, NewGamma).
+
+vDecs([procedure(Name, Args, Block) | T], Gamma, NewGamma) :-
+    !,length(Args, CountArgs),
+    append(Args, [rec(Name, CountArgs) | Gamma], TmpGamma),
+    vBlock(Block, TmpGamma),
+    vDecs(T, [proc(Name, CountArgs)|Gamma], NewGamma).
+vDecs([var(X) | T], Gamma, NewGamma) :-
+    vDecs(T, [var(X) | Gamma], NewGamma).
+vDecs([], Gamma, Gamma).
 
 vProgram(program(_, Block)) :-
     vBlock(Block, []).
 
-findVar(X, Gamma, Path) :-
-    write(X), write(Gamma), nl.
+findVar(X, [var(X) | _], var(X)) :- !.
+findVar(X, [var(_) | T], Path) :-
+    !, findVar(X, T, Path).
+findVar(X, [arg(var(X))| _], arg(var(X))) :- !.
+findVar(X, [arg(var(_))|T], Path) :-
+    !, findVar(X, T, Path).
+findVar(X, [proc(_,_) | T], Path) :-
+    !,findVar(X, T, Path).
+findVar(X, [rec(_,_) | T], up(Path)) :-
+    !,findVar(X, T, Path).
 
-findCall(X, CountArgs, Gamma, Path) :-
-    write((X, CountArgs)), write(Gamma), nl.
+findCall(X, CountArgs, [proc(X, CountArgs) | _], proc(X, CountArgs)) :- !.
+findCall(X, CountArgs, [rec(X, CountArgs)| _], rec(X, CountArgs)) :- !.
+findCall(X, CountArgs, [rec(_,_)| T], up(Path)) :-
+    !,findCall(X, CountArgs, T, Path).
+findCall(X, CountArgs, [_|T], Path) :-
+    findCall(X, CountArgs, T, Path).
+
+    %write((X, CountArgs)), write(Gamma), nl.
 
 
 %TESTING: reading code from file
