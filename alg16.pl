@@ -122,7 +122,7 @@ variables([Var|Others]) -->
 variables([Var]) -->
     variable(Var).
 
-variable(var(Var)) -->
+variable(var(Var, _)) -->
     [TokId], {TokId = tokId(Var)}.
 
 procedure(Procedure) -->
@@ -218,7 +218,7 @@ atom_expr(X) -->
 
 procCall(X) -->
     [ProcName], {ProcName = tokId(Name)}, [tokLParen], realArgs(Args), [tokRParen],
-    {X = call(Name, Args)}.
+    {X = call(Name, _, Args)}.
 
 realArgs([Arg|Args]) -->
     realArg(Arg), [tokComma], !, realArgs(Args).
@@ -278,13 +278,11 @@ vArithExpr(Expr, Gamma) :-
     Expr =.. [OP, L, R], !,
     vArithExpr(L, Gamma),
     vArithExpr(R, Gamma).
-vArithExpr(var(X), Gamma) :-
-    findVar(X, Gamma, Path), %HERE
-    write(Path), nl.
-vArithExpr(call(X, Args), Gamma) :-
+vArithExpr(var(X, Path), Gamma) :-
+    findVar(X, Gamma, Path). %HERE
+vArithExpr(call(X, Path, Args), Gamma) :-
     length(Args, CountArgs),
     findCall(X, CountArgs, Gamma, Path), %HERE
-    write(Path),
     vArgs(Args, Gamma).
 vArithExpr(const(_), _).
 
@@ -311,21 +309,18 @@ vInstr(if(Condition, Then, Else), Gamma) :-
 vInstr(while(Condition, Instrs), Gamma) :-
     !,vLogicExpr(Condition, Gamma),
     vInstrs(Instrs, Gamma).
-vInstr(call(Name, Args), Gamma) :-
+vInstr(call(Name, Path, Args), Gamma) :-
     !,length(Args, CountArgs),
     findCall(Name, CountArgs, Gamma, Path), %HERE
-    write(Path),
     vArgs(Args, Gamma).
 vInstr(return(Expr), Gamma) :-
     !,vArithExpr(Expr, Gamma).
 vInstr(write(Expr), Gamma) :-
     !,vArithExpr(Expr, Gamma).
-vInstr(read(var(X)), Gamma) :-
-    !,findVar(X, Gamma, Path), %HERE
-    write(Path), nl.
-vInstr(var(X) := Expr, Gamma) :-
+vInstr(read(var(X, Path)), Gamma) :-
+    !,findVar(X, Gamma, Path). %HERE
+vInstr(var(X, Path) := Expr, Gamma) :-
     !,findVar(X, Gamma, Path),
-    write(Path), nl,
     vArithExpr(Expr, Gamma).
 vInstr(emptyInstr, _).
 
@@ -351,18 +346,18 @@ vDecs([procedure(Name, Args, Block) | T], Gamma, NewGamma) :-
     append(Args, [rec(Name, CountArgs) | Gamma], TmpGamma),
     vBlock(Block, TmpGamma),
     vDecs(T, [proc(Name, CountArgs)|Gamma], NewGamma).
-vDecs([var(X) | T], Gamma, NewGamma) :-
-    vDecs(T, [var(X) | Gamma], NewGamma).
+vDecs([var(X, _) | T], Gamma, NewGamma) :-
+    vDecs(T, [var(X, _) | Gamma], NewGamma).
 vDecs([], Gamma, Gamma).
 
 vProgram(program(_, Block)) :-
     vBlock(Block, []).
 
-findVar(X, [var(X) | _], var(X)) :- !.
-findVar(X, [var(_) | T], Path) :-
+findVar(X, [var(X, _) | _], X) :- !.
+findVar(X, [var(_, _) | T], Path) :-
     !, findVar(X, T, Path).
-findVar(X, [arg(var(X))| _], arg(var(X))) :- !.
-findVar(X, [arg(var(_))|T], Path) :-
+findVar(X, [arg(var(X, _))| _], arg(X)) :- !.
+findVar(X, [arg(var(_, _))|T], Path) :-
     !, findVar(X, T, Path).
 findVar(X, [proc(_,_) | T], Path) :-
     !,findVar(X, T, Path).
@@ -385,7 +380,6 @@ test(Filename, AST) :-
     readProgram(Str, Program),
     phrase(lexer(TokList), Program),
     phrase(program(AST), TokList),
-    write(AST), nl,
     vProgram(AST),
     close(Str).
 
