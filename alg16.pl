@@ -10,12 +10,11 @@ lexer(Tokens) -->
         ; "-",      !, {Token = tokMinus}
         ; "*",      !, {Token = tokTimes}
         ; "<>",     !, {Token = tokNeq}
-        ; "<",      !, {Token = tokLt}
         ; "<=",     !, {Token = tokLeq}
-        ; ">",      !, {Token = tokGt}
+        ; "<",      !, {Token = tokLt}
         ; ">=",     !, {Token = tokGeq}
+        ; ">",      !, {Token = tokGt}
         ; "=",      !, {Token = tokEq}
-        ; ":=",     !, {Token = tokAssgn}
         ; ",",      !, {Token = tokComma}
         ; "(",      !, {Token = tokLParen}
         ; ")",      !, {Token = tokRParen}
@@ -97,7 +96,7 @@ identifier(FirstLetter, Id) -->
 :-op(700, xfy, <>).
 
 program(AST) -->
-    [tokProgram], [TokId], block(Block), {TokId = tokId(Id), AST = program(Id, Block)}.
+    [tokProgram], [TokId], block(Block), {TokId = tokId(Id), AST = program(Id, _, Block)}.
 
 block(Block) -->
     declarations(Decs), [tokBegin], complexInstr(ComplexInstr), [tokEnd],
@@ -331,47 +330,155 @@ vInstrs(Instr, Gamma) :-
     vInstr(Instr, Gamma).
 
 vProcds([], Gamma, Gamma).
-vProcds([procedure(Name, Args, Block)|T], Gamma, NewGamma) :-
+vProcds([procedure(Name, Args,block(Decs, Instrs))| T], Gamma, NewGamma) :-
     length(Args, CountArgs),
-    append(Args, [rec(Name, CountArgs)|Gamma], TmpGamma),
-    vBlock(Block, TmpGamma),
-    vProcds(T, [proc(Name, CountArgs)|Gamma], NewGamma).
+    countVars(Decs, CountVars),
+    append(Args, [rec(Name, CountArgs, CountVars)|Gamma], TmpGamma),
+    vBlock(block(Decs, Instrs), TmpGamma),
+    vProcds(T, [proc(Name, CountArgs, CountVars)|Gamma], NewGamma).
 
 vBlock(block(Decs, Instrs), Gamma) :-
     vDecs(Decs, Gamma, NewGamma),
     vInstrs(Instrs, NewGamma).
 
+vDecs([], Gamma, Gamma).
 vDecs([procedure(Name, Args, Block) | T], Gamma, NewGamma) :-
     !,length(Args, CountArgs),
-    append(Args, [rec(Name, CountArgs) | Gamma], TmpGamma),
+    Block =.. [block, Decs, _],
+    countVars(Decs, CountVars),
+    append(Args, [rec(Name, CountArgs, CountVars) | Gamma], TmpGamma),
     vBlock(Block, TmpGamma),
-    vDecs(T, [proc(Name, CountArgs)|Gamma], NewGamma).
+    vDecs(T, [proc(Name, CountArgs, CountVars)|Gamma], NewGamma).
 vDecs([var(X, _) | T], Gamma, NewGamma) :-
     vDecs(T, [var(X, _) | Gamma], NewGamma).
-vDecs([], Gamma, Gamma).
 
-vProgram(program(_, Block)) :-
+vProgram(program(_, CountVars, Block)) :-
+    Block =.. [block, Decs, _],
+    countVars(Decs, CountVars),
     vBlock(Block, []).
 
-findVar(X, [var(X, _) | _], X) :- !.
+findVar(X, [var(X, _) | T], Nr) :- !, findVarNumber(T, 1, Nr).
 findVar(X, [var(_, _) | T], Path) :-
     !, findVar(X, T, Path).
-findVar(X, [arg(var(X, _))| _], arg(X)) :- !.
+findVar(X, [arg(var(X, _))| T], arg(Nr)) :-
+     !, findArgNumber(T, 1, Nr).
 findVar(X, [arg(var(_, _))|T], Path) :-
     !, findVar(X, T, Path).
-findVar(X, [proc(_,_) | T], Path) :-
+findVar(X, [proc(_,_,_) | T], Path) :-
     !,findVar(X, T, Path).
-findVar(X, [rec(_,_) | T], up(Path)) :-
+findVar(X, [rec(_,_,_) | T], up(Path)) :-
     !,findVar(X, T, Path).
 
-findCall(X, CountArgs, [proc(X, CountArgs) | _], proc(X, CountArgs)) :- !.
-findCall(X, CountArgs, [rec(X, CountArgs)| _], rec(X, CountArgs)) :- !.
-findCall(X, CountArgs, [rec(_,_)| T], up(Path)) :-
+findVarNumber([], Acc, Acc) :- !.
+findVarNumber([arg(_)|_],Acc, Acc) :- !.
+findVarNumber([rec(_,_,_) | _], Acc, Acc) :- !.
+findVarNumber([_|T], Acc, Nr) :-
+    !, NewAcc is Acc+1,
+    findVarNumber(T, NewAcc, Nr).
+
+findArgNumber([], Acc, Acc) :- !.
+findArgNumber([rec(_,_,_) | _], Acc, Acc) :- !.
+findArgNumber([_|T], Acc, Nr) :-
+    !, NewAcc is Acc+1,
+    findArgNumber(T, NewAcc, Nr).
+
+findCall(X, CountArgs, [proc(X, CountArgs, CountVars) | _], proc(X, CountArgs, CountVars)) :- !.
+findCall(X, CountArgs, [rec(X, CountArgs, CountVars)| _], rec(X, CountArgs, CountVars)) :- !.
+findCall(X, CountArgs, [rec(_,_,_)| T], upcall(Path)) :-
     !,findCall(X, CountArgs, T, Path).
 findCall(X, CountArgs, [_|T], Path) :-
     findCall(X, CountArgs, T, Path).
 
-    %write((X, CountArgs)), write(Gamma), nl.
+%how many variables has procedure?
+countVars([], Acc, Acc).
+countVars([var(_,_) | T], Acc, CVars) :-
+    !, NewAcc is Acc+1,
+    countVars(T, NewAcc, CVars).
+countVars([_|T], Acc, CVars) :-
+    countVars(T, Acc, CVars).
+countVars(DecList, CVars) :-
+    countVars(DecList, 0, CVars).
+
+%TRANSLATING - FIRST STAGE:
+
+tProc(procedure(Name, _, block(Decs, Instrs)), Code, ProcMap, [(Name, X) | ProcMap]) :-
+    tInstrs(Instrs, InstrsCode, [(Name, X) | ProcMap]),
+    tDecs(Decs, DecsCode, [(Name, X) | ProcMap]),
+    append([label(X) | InstrsCode], DecsCode, Code).
+
+
+
+tInstrs(Instr ';;' OtherInstrs, Code, ProcMap) :-
+    !, tInstr(Instr, Code1, ProcMap),
+    append(Code1, Code2, Code),
+    tInstrs(OtherInstrs, Code2, ProcMap).
+tInstrs(Instr, Code, ProcMap) :-
+    tInstr(Instr, Code, ProcMap).
+
+tInstr(emptyInstr, [], _) :- !.
+tInstr(if(Condition, ThenPart, ElsePart), Code, ProcMap) :-
+    !, tLogicExpr(Condition, Code1, ProcMap),
+    tInstrs(ThenPart, CodeThen, ProcMap),
+    tInstrs(ElsePart, CodeElse, ProcMap).
+
+tArithExpr(Expr, Code, ProcMap) :-
+    ( OP = +, INSTR = add
+    ; OP = -, INSTR = sub
+    ; OP = *, INSTR = mult
+    ; OP = div, INSTR = div),
+    Expr =.. [OP, L, R], !,
+    tArithExpr(L, CL, ProcMap),
+    tArithExpr(R, CR, ProcMap),
+    append(CL, [push | CR], TmpC),
+    append(TmpC, [swapd, top, INSTR], Code).
+tArithExpr(const(X), [const(X)], _).
+
+tCall(upcall(X), Addr, SLCode, Code) :-
+    !, append(SLCode, [swapd, const(0x003), add, swapa, load], NewSLCode),
+    tCall(X, Addr, NewSLCode, Code).
+tCall(proc(_, ArgsCount, VarCount), Addr, SLCode, Code) :-
+    CodeTmp = [const(X),
+             push,
+             const(0xFFFF),
+             swapa,
+             load,
+             swapa,
+             swapd,
+             const(ArgsCount),
+             swapd,
+             sub,
+             push,
+             const(0xFFFE),
+             swapa,
+             load,
+             push,
+             const(0xFFFE),
+             swapa,
+             load],
+    append(CodeTmp, SLCode, CodeTmp2),
+    CodeTmp3 = [push,
+                const(0xFFFF),
+                swapa,
+                load,
+                swapd,
+                const(VarCount),
+                add,
+                store,
+                jump(Addr),
+                label(X)
+               ],
+    append(CodeTmp2, CodeTmp3, Code).
+
+tCall(call(Name, Path, Args), ProcMap, Code) :-
+    tArgs(Args, ArgsCode),
+    findAddr(ProcMap, Name, Addr),
+    tCall(Path, Addr, [], CallCode),
+    append(ArgsCode, CallCode, Code).
+
+findAddr([(Name, Addr) | _ ], Name, Addr) :- !.
+findAddr([_ | T], Name, Addr) :-
+    findAddr(T, Name, Addr).
+
 
 
 %TESTING: reading code from file
