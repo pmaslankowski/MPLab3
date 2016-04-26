@@ -433,11 +433,11 @@ tInstr(call(Name, Path, Args), Code, ProcMap) :-
 tInstr(return(Expr), Code, ProcMap) :-
     !, tArithExpr(Expr, ExprCode, ProcMap),
     ReturnCode = [
-                  swapd,
+                  swapd,           %result->DR
                   const(0xFFFF),
                   swapa,
                   swapd,
-                  store,
+                  store,          %wynik -> 3R
                   const(0xFFFD),
                   swapa,
                   load,
@@ -451,7 +451,7 @@ tInstr(return(Expr), Code, ProcMap) :-
                   const(0xFFFE),
                   swapa,
                   swapd,
-                  store,
+                  store,        %SP := OSP
                   const(2),
                   add,
                   swapa,
@@ -459,7 +459,7 @@ tInstr(return(Expr), Code, ProcMap) :-
                   swapa,
                   const(0xFFFD),
                   swapa,
-                  store,
+                  store,       %FP := OFP
                   swapd,
                   swapa,
                   load,
@@ -468,17 +468,31 @@ tInstr(return(Expr), Code, ProcMap) :-
                   swapa,
                   load,
                   swapd,
-                  store,
+                  store,      %RP -> 3R
                   swapd,
-                  push,
+                  swapd, %push start - push result
+                  const(0xFFFE),
+                  swapa,
+                  load,
+                  swapa,
+                  swapd,
+                  store,
+                  const(1),
+                  swapd,
+                  swapa,
+                  add,
+                  store, %push end
                   const(0xFFFF),
                   swapa,
                   load,
-                  jump],
+                  jump],   %jump to RP
     append(ExprCode, ReturnCode, Code).
 tInstr(write(Expr), Code, ProcMap) :-
     !, tArithExpr(Expr, ExprCode, ProcMap),
     append(ExprCode, [swapd, const(2), syscall], Code).
+tInstr(read(var(_, Path)), Code, _) :-
+    !, getVarAddr(Path, CodeAddr),
+    append(CodeAddr, [swapa, const(1), syscall, store], Code).
 
 
 tArithExpr(Expr, Code, ProcMap) :-
@@ -489,16 +503,67 @@ tArithExpr(Expr, Code, ProcMap) :-
     Expr =.. [OP, L, R], !,
     tArithExpr(L, CL, ProcMap),
     tArithExpr(R, CR, ProcMap),
-    append(CL, [push | CR], TmpC),
-    append(TmpC, [swapd, top, INSTR], Code).
+    append(CL, [swapd, %push start
+                const(0xFFFE),
+                swapa,
+                load,
+                swapa,
+                swapd,
+                store,
+                const(1),
+                swapd,
+                swapa,
+                add,
+                store | CR], TmpC), %push end
+    append(TmpC, [swapd,
+                  const(0xFFFE),
+                  swapa,
+                  load,
+                  swapa,
+                  swapd,
+                  load,
+                  swapa,
+                  swapd,
+                  const(1),
+                  swapd,
+                  sub,
+                  swapd,
+                  const(0xFFFE),
+                  swapa,
+                  swapd,
+                  store,
+                  swapd
+                  ,INSTR], Code).
 tArithExpr(const(X), [const(X)], _).
+
+getVarAddr(X, Acc, Code) :-
+    integer(X), !,
+    Offset is X + 3,
+    append(Acc, [swapd, const(Offset), add], Code).
+getVarAddr(up(X), Acc, Code) :-
+    append(Acc, [swapd, const(3), add, swapa, load], NewAcc),
+    getVarAddr(X, NewAcc, Code).
+getVarAddr(X, Code) :-
+    append([const(0xFFFD), swapa, load], Code1, Code),
+    getVarAddr(X, [], Code1).
 
 tCall(upcall(X), Addr, SLCode, Code) :-
     !, append(SLCode, [swapd, const(0x003), add, swapa, load], NewSLCode),
     tCall(X, Addr, NewSLCode, Code).
 tCall(proc(_, ArgsCount, VarCount), Addr, SLCode, Code) :-
     CodeTmp = [const(X),
-             push,
+             swapd, %push start
+             const(0xFFFE),
+             swapa,
+             load,
+             swapa,
+             swapd,
+             store,
+             const(1),
+             swapd,
+             swapa,
+             add,
+             store, %push end
              const(0xFFFE),
              swapa,
              load,
@@ -506,16 +571,49 @@ tCall(proc(_, ArgsCount, VarCount), Addr, SLCode, Code) :-
              const(ArgsCount),
              swapd,
              sub,
-             push,
+             swapd, %push start
+             const(0xFFFE),
+             swapa,
+             load,
+             swapa,
+             swapd,
+             store,
+             const(1),
+             swapd,
+             swapa,
+             add,
+             store, %push end,
              const(0xFFFD),
              swapa,
              load,
-             push,
+             swapd, %push start
+             const(0xFFFE),
+             swapa,
+             load,
+             swapa,
+             swapd,
+             store,
+             const(1),
+             swapd,
+             swapa,
+             add,
+             store, %push end,
              const(0xFFFD),
              swapa,
              load],
     append(CodeTmp, SLCode, CodeTmp2),
-    CodeTmp3 = [push,
+    CodeTmp3 = [swapd, %push start
+                const(0xFFFE),
+                swapa,
+                load,
+                swapa,
+                swapd,
+                store,
+                const(1),
+                swapd,
+                swapa,
+                add,
+                store, %push end,
                 const(0xFFFE),
                 swapa,
                 load,
