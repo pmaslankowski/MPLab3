@@ -438,7 +438,7 @@ tInstr(call(Name, Path, Args), Code, ProcMap) :-
     !, tCall(call(Name, Path, Args), ProcMap, Code).
 tInstr(return(Expr), Code, ProcMap) :-
     !, tArithExpr(Expr, ExprCode, ProcMap),
-    ReturnCode = [
+    ReturnCode = [ %TODO: add result of ArithExpr to stack, look at top operation - proper stack pointer (SP-1)
                   swapd,           %result->DR
                   const(0xFFFF),
                   swapa,
@@ -518,7 +518,8 @@ tInstr(read(var(_, Path)), Code, _) :-
 tInstr(var(_, Path) := Expr, Code, ProcMap) :-
     !, tArithExpr(Expr, ExprCode, ProcMap).
 
-
+tArithExpr(call(_, Path, Args), Code, ProcMap) :-
+    !, tCall(call(_, Path, Args), ProcMap, Code).
 tArithExpr(Expr, Code, ProcMap) :-
     ( OP = +, INSTR = add
     ; OP = -, INSTR = sub
@@ -531,7 +532,7 @@ tArithExpr(Expr, Code, ProcMap) :-
     append(TmpC, [const(0xFFFE),
                   swapa,
                   load,
-                  swapa,
+                  swapa, %MISTAKE: top at proper pointer (SP - 1)
                   load,
                   swapa,
                   swapd,
@@ -686,7 +687,11 @@ tCall(call(Name, Path, Args), ProcMap, Code) :-
     tCall(Path, Addr, [], CallCode),
     append(ArgsCode, CallCode, Code).
 
-tArgs(_, [argsCode]).
+tArgs([], [], _).
+tArgs([H|T], ArgsCode, ProcMap) :-
+    tArithExpr(H, ArgCode, ProcMap),
+    append(ArgCode, OthersCode, ArgsCode),
+    tArgs(T, OthersCode, ProcMap).
 
 findAddr([(Name, Addr) | _ ], Name, Addr) :- !.
 findAddr([_ | T], Name, Addr) :-
