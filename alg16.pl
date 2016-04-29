@@ -698,6 +698,53 @@ findAddr([_ | T], Name, Addr) :-
     findAddr(T, Name, Addr).
 
 
+%FINAL TRANSLATION:
+translate([const(Val) | T], X, 0, CurrWord, OrderCount, AssemblyCode) :-
+    !, append([CurrWord | X], OtherAsm, AssemblyCode),
+    length(X, XLen),
+    NewOrderCount is OrderCount + 1 + XLen,
+    translate(T, [Val], 1, 9, NewOrderCount, OtherAsm). %CONST CODE = 9
+translate([const(Val) | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
+    NewNr is (Nr + 1) mod 4,
+    NewCurrWord is 16 * CurrWord + 9, %CONST CODE = 9
+    NewOrderCount is OrderCount + 1,
+    translate(T, [Val | X], NewNr, NewCurrWord, NewOrderCount, AssemblyCode).
+translate([label(Val), NextOrder | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
+    !, addNOPs(Nr, CurrWord, CurrWord_),
+    append([CurrWord_ | X ], OtherAsm, AssemblyCode),
+    length(X, XLen),
+    NewOrderCount is OrderCount + 1 + XLen,
+    member((NextOrder, TOrder), []),
+    Val = NewOrderCount,
+    translate(T, [], 1, TOrder, NewOrderCount, OtherAsm).
+translate([label(Val)], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
+    !, addNOPs(Nr, CurrWord, CurrWord_),
+    AssemblyCode = [CurrWord_ | X],
+    length(X, XLen),
+    NewOrderCount is OrderCount + 1 + XLen,
+    Val = NewOrderCount.
+translate([Order | T], X, 0, CurrWord, OrderCount, AssemblyCode) :-
+    !, append([CurrWord | X], OtherAsm, AssemblyCode),
+    length(X, XL),
+    NewOrderCount is OrderCount + 1 + XL,
+    member((Order, TOrder), []),
+    translate(T, [], 1, TOrder, NewOrderCount, OtherAsm).
+translate([Order | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
+    !, NewNr is (Nr + 1) mod 4,
+    member((Order, TOrder), []),
+    NewCurrWord is CurrWord * 16 + TOrder,
+    NewOrderCount is OrderCount + 1,
+    translate(T, X, NewNr, NewCurrWord, NewOrderCount, AssemblyCode).
+translate([], X, Nr, CurrWord, _, AssemblyCode) :-
+    !, addNOPs(Nr, CurrWord, CurrWord_),
+    AssemblyCode = [CurrWord_ | X].
+
+addNOPs(0, CurrWord, CurrWord) :- !.
+addNOPs(Nr, CurrWord, Res) :-
+    NewCurrWord is CurrWord * 16,
+    NewNr is (Nr + 1) mod 4,
+    addNOPs(NewNr, NewCurrWord, Res).
+
 
 %TESTING: reading code from file
 test(Filename, AST) :-
