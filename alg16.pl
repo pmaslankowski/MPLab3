@@ -705,16 +705,31 @@ translate([const(Val) | T], X, 0, CurrWord, OrderCount, AssemblyCode) :-
     NewOrderCount is OrderCount + 1 + XLen,
     translate(T, [Val], 1, 9, NewOrderCount, OtherAsm). %CONST CODE = 9
 translate([const(Val) | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
-    NewNr is (Nr + 1) mod 4,
+    !, NewNr is (Nr + 1) mod 4,
     NewCurrWord is 16 * CurrWord + 9, %CONST CODE = 9
-    NewOrderCount is OrderCount + 1,
-    translate(T, [Val | X], NewNr, NewCurrWord, NewOrderCount, AssemblyCode).
+    append(X, [Val], NewX),
+    translate(T, NewX, NewNr, NewCurrWord, OrderCount, AssemblyCode).
 translate([label(Val), NextOrder | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
     !, addNOPs(Nr, CurrWord, CurrWord_),
     append([CurrWord_ | X ], OtherAsm, AssemblyCode),
     length(X, XLen),
     NewOrderCount is OrderCount + 1 + XLen,
-    member((NextOrder, TOrder), []),
+    member((NextOrder, TOrder), [(nop, 0),
+                                 (syscall, 1),
+                                 (load, 2),
+                                 (store, 3),
+                                 (swapa, 4),
+                                 (swapd, 5),
+                                 (branchz, 6),
+                                 (branchn, 7),
+                                 (jump, 8),
+                                 (const, 9),
+                                 (add, 0xA),
+                                 (sub, 0xB),
+                                 (mult, 0xC),
+                                 (div, 0xD),
+                                 (shift, 0xE),
+                                 (nand, 0xF)]), !,
     Val = NewOrderCount,
     translate(T, [], 1, TOrder, NewOrderCount, OtherAsm).
 translate([label(Val)], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
@@ -727,17 +742,48 @@ translate([Order | T], X, 0, CurrWord, OrderCount, AssemblyCode) :-
     !, append([CurrWord | X], OtherAsm, AssemblyCode),
     length(X, XL),
     NewOrderCount is OrderCount + 1 + XL,
-    member((Order, TOrder), []),
+    member((Order, TOrder), [(nop, 0),
+                                 (syscall, 1),
+                                 (load, 2),
+                                 (store, 3),
+                                 (swapa, 4),
+                                 (swapd, 5),
+                                 (branchz, 6),
+                                 (branchn, 7),
+                                 (jump, 8),
+                                 (const, 9),
+                                 (add, 0xA),
+                                 (sub, 0xB),
+                                 (mult, 0xC),
+                                 (div, 0xD),
+                                 (shift, 0xE),
+                                 (nand, 0xF)]), !,
     translate(T, [], 1, TOrder, NewOrderCount, OtherAsm).
 translate([Order | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
     !, NewNr is (Nr + 1) mod 4,
-    member((Order, TOrder), []),
+    member((Order, TOrder), [(nop, 0),
+                                 (syscall, 1),
+                                 (load, 2),
+                                 (store, 3),
+                                 (swapa, 4),
+                                 (swapd, 5),
+                                 (branchz, 6),
+                                 (branchn, 7),
+                                 (jump, 8),
+                                 (const, 9),
+                                 (add, 0xA),
+                                 (sub, 0xB),
+                                 (mult, 0xC),
+                                 (div, 0xD),
+                                 (shift, 0xE),
+                                 (nand, 0xF)]), !,
     NewCurrWord is CurrWord * 16 + TOrder,
-    NewOrderCount is OrderCount + 1,
-    translate(T, X, NewNr, NewCurrWord, NewOrderCount, AssemblyCode).
+    translate(T, X, NewNr, NewCurrWord, OrderCount, AssemblyCode).
 translate([], X, Nr, CurrWord, _, AssemblyCode) :-
     !, addNOPs(Nr, CurrWord, CurrWord_),
     AssemblyCode = [CurrWord_ | X].
+translate(Code, AssemblyCode) :-
+    translate(Code, [], 0, 0, -1, [0 | AssemblyCode]).
 
 addNOPs(0, CurrWord, CurrWord) :- !.
 addNOPs(Nr, CurrWord, Res) :-
