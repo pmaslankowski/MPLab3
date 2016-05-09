@@ -527,8 +527,6 @@ tInstr(return(Expr), Code, ProcMap) :-
                   load,
                   swapd,
                   store, % FP := OFP
-
-
                   swapd,
                   swapa,
                   load,
@@ -758,9 +756,9 @@ getVarAddr(X, Code) :-
     append([const(0xFFFD), swapa, load], Code1, Code),
     getVarAddr(X, [], Code1).
 
-%TODO: check it for stack
+
 tCall(upcall(X), Addr, SLCode, Code) :-
-    !, append(SLCode, [swapd, const(0x003), add, swapa, load], NewSLCode),
+    !, append(SLCode, [swapd, const(0x003), swapd, sub, swapa, load], NewSLCode),
     tCall(X, Addr, NewSLCode, Code).
 tCall(Something, Addr, SLCode, Code) :-
     (Something = proc(_, ArgsCount, VarCount) ; Something = rec(_, ArgsCount, VarCount)), !,
@@ -775,7 +773,7 @@ tCall(Something, Addr, SLCode, Code) :-
              const(1),
              swapd,
              swapa,
-             add,
+             sub,
              store, %push end
              const(0xFFFE),
              swapa,
@@ -783,7 +781,7 @@ tCall(Something, Addr, SLCode, Code) :-
              swapd,
              const(ArgsCount),
              swapd,
-             sub,
+             add,
              swapd, %push start
              const(0xFFFE),
              swapa,
@@ -794,7 +792,7 @@ tCall(Something, Addr, SLCode, Code) :-
              const(1),
              swapd,
              swapa,
-             add,
+             sub,
              store, %push end,
              const(0xFFFD),
              swapa,
@@ -809,7 +807,7 @@ tCall(Something, Addr, SLCode, Code) :-
              const(1),
              swapd,
              swapa,
-             add,
+             sub,
              store, %push end,
              const(0xFFFD),
              swapa,
@@ -825,7 +823,7 @@ tCall(Something, Addr, SLCode, Code) :-
                 const(1),
                 swapd,
                 swapa,
-                add,
+                sub,
                 store, %push end,
                 const(0xFFFE),
                 swapa,
@@ -835,14 +833,15 @@ tCall(Something, Addr, SLCode, Code) :-
                 swapa,
                 const(0x0003),
                 swapd,
-                sub,
+                add,
                 store,
                 const(0xFFFE),
                 swapa,
                 load,
                 swapd,
                 const(VarCount),
-                add,
+                swapd,
+                sub,
                 store,
                 jump(Addr),
                 label(X)
@@ -877,12 +876,12 @@ translate([const(Val) | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
     NewCurrWord is 16 * CurrWord + 9, %CONST CODE = 9
     append(X, [Val], NewX),
     translate(T, NewX, NewNr, NewCurrWord, OrderCount, AssemblyCode).
-translate([label(Val), NextOrder | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
+translate([label(Val), NextOrder | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :- %what if next order is label or val?
     !, addNOPs(Nr, CurrWord, CurrWord_),
     append([CurrWord_ | X ], OtherAsm, AssemblyCode),
     length(X, XLen),
     NewOrderCount is OrderCount + 1 + XLen,
-    member((NextOrder, TOrder), [(nop, 0),
+    (member((NextOrder, TOrder), [(nop, 0),
                                  (syscall, 1),
                                  (load, 2),
                                  (store, 3),
@@ -899,7 +898,9 @@ translate([label(Val), NextOrder | T], X, Nr, CurrWord, OrderCount, AssemblyCode
                                  (shift, 0xE),
                                  (nand, 0xF)]), !,
     Val = NewOrderCount,
-    translate(T, [], 1, TOrder, NewOrderCount, OtherAsm).
+    translate(T, [], 1, TOrder, NewOrderCount, OtherAsm)
+    ; NextOrder = const(Val2),
+    translate(T, [Val2], 1, 9, NewOrderCount, OtherAsm)).
 translate([label(Val)], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
     !, addNOPs(Nr, CurrWord, CurrWord_),
     AssemblyCode = [CurrWord_ | X],
@@ -961,12 +962,15 @@ addNOPs(Nr, CurrWord, Res) :-
 
 
 %TESTING: reading code from file
-test(Filename, AST) :-
+test(Filename, MachineCode) :-
     open(Filename, read, Str),
     readProgram(Str, Program),
     phrase(lexer(TokList), Program),
     phrase(program(AST), TokList),
     vProgram(AST),
+    tProgram(AST, Code),
+    translate(Code, MachineCode),
+    %format('~w ~r16 ~n', MachineCode),
     close(Str).
 
 readProgram(In, []) :-
