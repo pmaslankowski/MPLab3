@@ -443,8 +443,8 @@ tDecs([_|T], CodeAcc, Code, ProcMap, NewProcMap) :-
 tDecs(Decs, Code, ProcMap, NewProcMap) :-
   tDecs(Decs, [], Code, ProcMap, NewProcMap).
 
-%tInstrs(return(X) ';;' _, Code, ProcMap) :-
-%  !, tInstr(return(X), Code, ProcMap).
+tInstrs(return(X) ';;' _, Code, ProcMap) :-
+  !, tInstr(return(X), Code, ProcMap).
 tInstrs(Instr ';;' OtherInstrs, Code, ProcMap) :-
     !, tInstr(Instr, Code1, ProcMap),
     append(Code1, Code2, Code),
