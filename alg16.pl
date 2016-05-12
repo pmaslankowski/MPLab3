@@ -95,12 +95,20 @@ identifier(FirstLetter, Id) -->
 :-op(700, xfy, <=).
 :-op(700, xfy, <>).
 
-program(AST) -->
-    [tokProgram], [TokId], block(Block), {TokId = tokId(Id), AST = program(Id, _, Block)}.
+appInstr(I1 ';;' I2, Instr2, I1 ';;' X) :-
+  !, appInstr(I2, Instr2, X).
+appInstr(Instr1, Instr2, Instr1 ';;' Instr2) :- !.
 
-block(Block) -->
+program(AST) -->
+    [tokProgram], [TokId], startblock(Block), {TokId = tokId(Id), AST = program(Id, _, Block)}.
+
+startblock(Block) -->
     declarations(Decs), [tokBegin], complexInstr(ComplexInstr), [tokEnd],
     {Block = block(Decs, ComplexInstr)}.
+
+block(Block) -->
+    declarations(Decs), [tokBegin], complexInstr(ComplexInstrTmp), [tokEnd],
+    {appInstr(ComplexInstrTmp, return(const(0)), ComplexInstr), Block = block(Decs, ComplexInstr)}.
 
 declarations(Declarations) -->
     declaration(Declaration), !, declarations(Other),
@@ -435,6 +443,8 @@ tDecs([_|T], CodeAcc, Code, ProcMap, NewProcMap) :-
 tDecs(Decs, Code, ProcMap, NewProcMap) :-
   tDecs(Decs, [], Code, ProcMap, NewProcMap).
 
+%tInstrs(return(X) ';;' _, Code, ProcMap) :-
+%  !, tInstr(return(X), Code, ProcMap).
 tInstrs(Instr ';;' OtherInstrs, Code, ProcMap) :-
     !, tInstr(Instr, Code1, ProcMap),
     append(Code1, Code2, Code),
@@ -989,7 +999,7 @@ addNOPs(Nr, CurrWord, Res) :-
 
 
 %TESTING: reading code from file
-test(Filename, AST) :-
+test(Filename, MachineCode) :-
     open(Filename, read, Str),
     readProgram(Str, Program),
     phrase(lexer(TokList), Program),
@@ -997,9 +1007,10 @@ test(Filename, AST) :-
     phrase(program(AST), TokList),
     vProgram(AST),
     tProgram(AST, Code),
-    writeCode(Code), nl, nl, nl,
+    write(AST),
+    %writeCode(Code), nl, nl, nl,
     translate(Code, MachineCode),
-    writeCode(MachineCode),
+    %writeCode(MachineCode),
     close(Str).
 
 readProgram(In, []) :-
@@ -1011,3 +1022,13 @@ readProgram(In, [Char|Prog]) :-
 writeCode([]).
 writeCode([H|T]) :-
     write(H), nl, writeCode(T).
+
+writeToFileAux([], _).
+writeToFileAux([H|T], Stream) :-
+  write(Stream, H),
+  nl(Stream),
+  writeToFileAux(T, Stream).
+writeToFile(L, Filename) :-
+  open(Filename, write, Stream),
+  writeToFileAux(L, Stream),
+  close(Stream).
