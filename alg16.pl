@@ -77,7 +77,7 @@ letter(X) -->
     [X], {code_type(X, alpha)}.
 
 alphanum([H|T]) -->
-    [H], {code_type(H, alnum) ; H = '_'}, !,  alphanum(T).
+    [H], {code_type(H, alnum), ! ; char_code('_', H), ! ; char_code('''', H), !},  alphanum(T).
 alphanum([]) -->
     [].
 
@@ -155,7 +155,7 @@ instr(Instr) -->
     (
     [tokIf], !, logicExpr(L_Expr), [tokThen], complexInstr(ThenPart),
         ( [tokFi], !, {Instr = if(L_Expr, ThenPart, emptyInstr)}
-        ; [tokThen], complexInstr(ElsePart), {Instr = if(L_Expr, ThenPart, ElsePart)})
+        ; [tokElse], complexInstr(ElsePart), {Instr = if(L_Expr, ThenPart, ElsePart)}, [tokFi])
     ; [tokWhile], !, logicExpr(L_Expr), [tokDo], complexInstr(Body), [tokDone],
       {Instr = while(L_Expr, Body)}
     ; [tokCall], !, procCall(Proc),
@@ -286,10 +286,12 @@ vArithExpr(call(X, Path, Args), Gamma) :-
 vArithExpr(const(_), _).
 
 vLogicExpr(Expr, Gamma) :-
-    (OP = and; OP = or; OP = not),
+    (OP = and; OP = or),
     Expr =.. [OP, L, R], !,
     vLogicExpr(L, Gamma),
     vLogicExpr(R, Gamma).
+vLogicExpr(not(X), Gamma) :-
+  !, vLogicExpr(X, Gamma).
 vLogicExpr(Expr, Gamma) :-
     (OP = <>; OP = <=; OP = <; OP = >; OP = >=; OP = (=)),
     Expr =.. [OP, L, R], !,
@@ -333,7 +335,8 @@ vProcds([], Gamma, Gamma).
 vProcds([procedure(Name, Args,block(Decs, Instrs))| T], Gamma, NewGamma) :-
     length(Args, CountArgs),
     countVars(Decs, CountVars),
-    append(Args, [rec(Name, CountArgs, CountVars)|Gamma], TmpGamma),
+    reverse(Args, RArgs),
+    append(RArgs, [rec(Name, CountArgs, CountVars)|Gamma], TmpGamma),
     vBlock(block(Decs, Instrs), TmpGamma),
     vProcds(T, [proc(Name, CountArgs, CountVars)|Gamma], NewGamma).
 
@@ -346,7 +349,8 @@ vDecs([procedure(Name, Args, Block) | T], Gamma, NewGamma) :-
     !,length(Args, CountArgs),
     Block =.. [block, Decs, _],
     countVars(Decs, CountVars),
-    append(Args, [rec(Name, CountArgs, CountVars) | Gamma], TmpGamma),
+    reverse(Args, RArgs),
+    append(RArgs, [rec(Name, CountArgs, CountVars) | Gamma], TmpGamma),
     vBlock(Block, TmpGamma),
     vDecs(T, [proc(Name, CountArgs, CountVars)|Gamma], NewGamma).
 vDecs([var(X, _) | T], Gamma, NewGamma) :-
@@ -404,7 +408,7 @@ countVars(DecList, CVars) :-
 tProgram(program(_, VarCount, block(Decs, Instrs)), Code) :-
     tDecs(Decs, DecsCode, [], ProcMap),
     tInstrs(Instrs, InstrsCode, ProcMap),
-    StartSP is 0xFFFE - 5 - VarCount,
+    StartSP is 0xFFFE - 5 - VarCount - 1,
     append([const(0xFFFE), %creating AR of program
             swapa,
             const(StartSP),
@@ -413,7 +417,7 @@ tProgram(program(_, VarCount, block(Decs, Instrs)), Code) :-
             swapa,
             const(0xFFFC),
             store,
-            const(Start), swapa, jump | DecsCode], [label(Start) | InstrsCode], TmpCode),
+            const(Start), jump | DecsCode], [label(Start) | InstrsCode], TmpCode),
     append(TmpCode, [const(0), syscall], Code).
 
 tProc(procedure(Name, _, block(Decs, Instrs)), Code, ProcMap, [(Name, X) | ProcMap]) :-
@@ -423,9 +427,9 @@ tProc(procedure(Name, _, block(Decs, Instrs)), Code, ProcMap, [(Name, X) | ProcM
 
 tDecs([], CodeAcc, CodeAcc, ProcMap, ProcMap).
 tDecs([procedure(Name, _, block(Decs, Instrs)) | T], CodeAcc, Code, ProcMap, NewProcMap) :-
-    !, tProc(procedure(Name, _, block(Decs, Instrs)), ProcCode, ProcMap, _),
+    !, tProc(procedure(Name, _, block(Decs, Instrs)), ProcCode, ProcMap, [(Name, X) | _]),
     append(CodeAcc, ProcCode, NewAccCode),
-    tDecs(T, NewAccCode, Code, [(Name, _) | ProcMap], NewProcMap).
+    tDecs(T, NewAccCode, Code, [(Name, X) | ProcMap], NewProcMap).
 tDecs([_|T], CodeAcc, Code, ProcMap, NewProcMap) :-
     tDecs(T, CodeAcc, Code, ProcMap, NewProcMap).
 tDecs(Decs, Code, ProcMap, NewProcMap) :-
@@ -443,6 +447,8 @@ tInstr(if(Condition, ThenPart, ElsePart), Code, ProcMap) :-
     !, tLogicExpr(Condition, Code1, ProcMap),
     tInstrs(ThenPart, CodeThen, ProcMap),
     tInstrs(ElsePart, CodeElse, ProcMap),
+    append(CodeThen, [const(Y), jump], CodeThen2),
+    append(CodeElse, [label(Y)], CodeElse2),
     append(Code1, [const(0xFFFE),
                    swapa,
                    load,
@@ -456,12 +462,13 @@ tInstr(if(Condition, ThenPart, ElsePart), Code, ProcMap) :-
                    swapa,
                    const(X),
                    swapa,
-                   branchz | CodeThen], TmpCode),
-    append(TmpCode, [label(X) | CodeElse], Code).
+                   branchz | CodeThen2], TmpCode),
+    append(TmpCode, [label(X) | CodeElse2], Code).
 tInstr(while(Condition, Instrs), Code, ProcMap) :-
     !, tLogicExpr(Condition, CodeCondition, ProcMap),
     tInstrs(Instrs, CodeInstrs, ProcMap),
     append([label(X)], CodeCondition, TmpCode),
+    append(CodeInstrs, [const(X), jump, label(End)], InstrsCode),
     append(TmpCode, [const(0xFFFE),
                      swapa,
                      load,
@@ -475,10 +482,16 @@ tInstr(while(Condition, Instrs), Code, ProcMap) :-
                      swapa,
                      const(End),
                      swapa,
-                     branchz|CodeInstrs], CodeTmp2),
-    Code = [const(X), swapa, jump, label(End) | CodeTmp2].
+                     branchz|InstrsCode], Code).
 tInstr(call(Name, Path, Args), Code, ProcMap) :-
-    !, tCall(call(Name, Path, Args), ProcMap, Code).
+    !, tCall(call(Name, Path, Args), ProcMap, TmpCode),
+    append(TmpCode, [ const(0xFFFE),
+                      swapa,
+                      load,
+                      swapd,
+                      const(1),
+                      add,
+                      store], Code).
 tInstr(return(Expr), Code, ProcMap) :-
     !, tArithExpr(Expr, ExprCode, ProcMap),
     ReturnCode = [const(0xFFFE), %get the result from stack
@@ -623,6 +636,32 @@ tArithExpr(Expr, Code, ProcMap) :-
                   load,
                   INSTR,
                   store], Code).
+tArithExpr(Expr, Code, ProcMap) :-
+  Expr =.. [mod, L, R], !,
+  tArithExpr(L, CL, ProcMap),
+  tArithExpr(R, CR, ProcMap),
+  append(CL, CR, TmpC),
+  append(TmpC, [const(0xFFFE),
+                swapa,
+                load,
+                swapd,
+                const(1),
+                swapd,
+                add,
+                store,
+                swapa,
+                load,
+                swapa,
+                add,
+                swapa,
+                swapd,
+                load,
+                div,
+                const(0xfff0),
+                swapd,
+                shift,
+                store], Code).
+
 tArithExpr(const(X), Code, _) :-
     !, Code = [
             const(X),
@@ -655,6 +694,7 @@ tArithExpr(var(_, Path), Code, _) :-
                      sub,
                      store %push end
                      ], Code).
+
 
 parseLogicExpr(not(X), nand(XParsed, XParsed)) :-
     !, parseLogicExpr(X, XParsed).
@@ -730,7 +770,6 @@ tLogicExpr_(Expr, Code, ProcMap) :-
                      const(0),
                      store,
                      const(EndLab),
-                     swapa,
                      jump,
                      label(TrueLab),
                      const(0xFFFE),
@@ -748,7 +787,9 @@ tLogicExpr_(Expr, Code, ProcMap) :-
 getVarAddr(X, Acc, Code) :-
     integer(X), !,
     Offset is X + 3,
-    append(Acc, [swapd, const(Offset), sub], Code).
+    append(Acc, [swapd, const(Offset), swapd, sub], Code).
+getVarAddr(arg(X), Acc, Code) :-
+  !, append(Acc, [swapd, const(X), swapd, add], Code).
 getVarAddr(up(X), Acc, Code) :-
     append(Acc, [swapd, const(3), swapd, sub, swapa, load], NewAcc),
     getVarAddr(X, NewAcc, Code).
@@ -762,6 +803,7 @@ tCall(upcall(X), Addr, SLCode, Code) :-
     tCall(X, Addr, NewSLCode, Code).
 tCall(Something, Addr, SLCode, Code) :-
     (Something = proc(_, ArgsCount, VarCount) ; Something = rec(_, ArgsCount, VarCount)), !,
+    ArgsCount2 is ArgsCount + 1,
     CodeTmp = [const(X),
              swapd, %push start
              const(0xFFFE),
@@ -779,7 +821,7 @@ tCall(Something, Addr, SLCode, Code) :-
              swapa,
              load,
              swapd,
-             const(ArgsCount),
+             const(ArgsCount2),
              swapd,
              add,
              swapd, %push start
@@ -831,7 +873,7 @@ tCall(Something, Addr, SLCode, Code) :-
                 swapd,
                 const(0xFFFD),
                 swapa,
-                const(0x0003),
+                const(4),
                 swapd,
                 add,
                 store,
@@ -843,7 +885,8 @@ tCall(Something, Addr, SLCode, Code) :-
                 swapd,
                 sub,
                 store,
-                jump(Addr),
+                const(Addr),
+                jump,
                 label(X)
                ],
     append(CodeTmp2, CodeTmp3, Code).
@@ -851,14 +894,17 @@ tCall(Something, Addr, SLCode, Code) :-
 tCall(call(Name, Path, Args), ProcMap, Code) :-
     tArgs(Args, ArgsCode, ProcMap),
     findAddr(ProcMap, Name, Addr),
+    write(ProcMap),
     tCall(Path, Addr, [], CallCode),
     append(ArgsCode, CallCode, Code).
 
-tArgs([], [], _).
-tArgs([H|T], ArgsCode, ProcMap) :-
+tArgs([], Acc, Acc, _).
+tArgs([H|T], Acc, ArgsCode, ProcMap) :-
     tArithExpr(H, ArgCode, ProcMap),
-    append(ArgCode, OthersCode, ArgsCode),
-    tArgs(T, OthersCode, ProcMap).
+    append(ArgCode, Acc, NewAcc),
+    tArgs(T, NewAcc, ArgsCode, ProcMap).
+tArgs(Args, Code, ProcMap) :-
+  tArgs(Args, [], Code, ProcMap).
 
 findAddr([(Name, Addr) | _ ], Name, Addr) :- !.
 findAddr([_ | T], Name, Addr) :-
@@ -878,29 +924,10 @@ translate([const(Val) | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
     translate(T, NewX, NewNr, NewCurrWord, OrderCount, AssemblyCode).
 translate([label(Val), NextOrder | T], X, Nr, CurrWord, OrderCount, AssemblyCode) :- %what if next order is label or val?
     !, addNOPs(Nr, CurrWord, CurrWord_),
-    append([CurrWord_ | X ], OtherAsm, AssemblyCode),
     length(X, XLen),
     NewOrderCount is OrderCount + 1 + XLen,
-    (member((NextOrder, TOrder), [(nop, 0),
-                                 (syscall, 1),
-                                 (load, 2),
-                                 (store, 3),
-                                 (swapa, 4),
-                                 (swapd, 5),
-                                 (branchz, 6),
-                                 (branchn, 7),
-                                 (jump, 8),
-                                 (const, 9),
-                                 (add, 0xA),
-                                 (sub, 0xB),
-                                 (mult, 0xC),
-                                 (div, 0xD),
-                                 (shift, 0xE),
-                                 (nand, 0xF)]), !,
     Val = NewOrderCount,
-    translate(T, [], 1, TOrder, NewOrderCount, OtherAsm)
-    ; NextOrder = const(Val2),
-    translate(T, [Val2], 1, 9, NewOrderCount, OtherAsm)).
+    translate([NextOrder | T], X, 0, CurrWord_, OrderCount, AssemblyCode).
 translate([label(Val)], X, Nr, CurrWord, OrderCount, AssemblyCode) :-
     !, addNOPs(Nr, CurrWord, CurrWord_),
     AssemblyCode = [CurrWord_ | X],
@@ -962,15 +989,17 @@ addNOPs(Nr, CurrWord, Res) :-
 
 
 %TESTING: reading code from file
-test(Filename, MachineCode) :-
+test(Filename, AST) :-
     open(Filename, read, Str),
     readProgram(Str, Program),
     phrase(lexer(TokList), Program),
+    %writeCode(TokList),
     phrase(program(AST), TokList),
     vProgram(AST),
     tProgram(AST, Code),
+    writeCode(Code), nl, nl, nl,
     translate(Code, MachineCode),
-    %format('~w ~r16 ~n', MachineCode),
+    writeCode(MachineCode),
     close(Str).
 
 readProgram(In, []) :-
