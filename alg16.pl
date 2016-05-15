@@ -1,5 +1,12 @@
+%Kompilator języka Algol 16
+%Autor: Piotr Maślankowski
+%Zaimplementowana wersja języka: bez przekazywania parametrów przez nazwę.
+% (tzn. kompilator obsługuje zagnieżdżone procedury)
 
 
+
+%Informacja:
+%Parser i lekser na podstawie parsera języka While zamieszczonego na KNO
 
 %LEXICAL ANALYSIS:
 lexer(Tokens) -->
@@ -148,7 +155,7 @@ formalArgsSequence([Arg]) -->
 formalArgsSequence([]) -->
     [].
 
-formalArg(by_val(Var)) -->
+formalArg(arg(Var)) -->
     [tokValue], !, variable(Var).
 formalArg(arg(Arg)) -->
     variable(Arg).
@@ -262,34 +269,41 @@ conjunct(Conjunct) -->
     ; relExpr(Conjunct) ).
 
 relExpr(Expr) -->
-    ( arith_expr(LExpr), !, rel_op(Op), arith_expr(RExpr),
+    ( arith_expr(LExpr), rel_op(Op), !, arith_expr(RExpr),
       {Expr =.. [Op, LExpr, RExpr]}
-    ; [tokLParen], logicExpr(Expr), [tokRParen] ).
+    ; [tokLParen], !, logicExpr(Expr), [tokRParen] ).
+relExpr(Expr) -->
+  arith_expr(LExpr), [tokLeq], !, arith_expr(RExpr),
+  {Expr = not(LExpr > RExpr)}.
+relExpr(Expr) -->
+  arith_expr(LExpr), [tokGeq], !, arith_expr(RExpr),
+  {Expr = not(LExpr < RExpr)}.
 
 rel_op(<>) -->
     [tokNeq], !.
 rel_op(<) -->
     [tokLt], !.
-rel_op(<=) -->
-    [tokLeq], !.
 rel_op(>) -->
     [tokGt], !.
-rel_op(>=) -->
-    [tokGeq], !.
 rel_op(=) -->
     [tokEq], !.
 
-%VALIDATING SEMANTICS - NAMESPACES OF VARIABLES AND PROCEDURES
+
+%Validating namespaces:
+
 vArithExpr(Expr, Gamma) :-
     (OP = + ; OP = -; OP = *; OP = div; OP = mod),
     Expr =.. [OP, L, R], !,
     vArithExpr(L, Gamma),
     vArithExpr(R, Gamma).
+vArithExpr(Expr, Gamma) :-
+    Expr =.. [-, X], !,
+    vArithExpr(X, Gamma).
 vArithExpr(var(X, Path), Gamma) :-
-    findVar(X, Gamma, Path). %HERE
+    findVar(X, Gamma, Path).
 vArithExpr(call(X, Path, Args), Gamma) :-
     length(Args, CountArgs),
-    findCall(X, CountArgs, Gamma, Path), %HERE
+    findCall(X, CountArgs, Gamma, Path),
     vArgs(Args, Gamma).
 vArithExpr(const(_), _).
 
@@ -320,14 +334,14 @@ vInstr(while(Condition, Instrs), Gamma) :-
     vInstrs(Instrs, Gamma).
 vInstr(call(Name, Path, Args), Gamma) :-
     !,length(Args, CountArgs),
-    findCall(Name, CountArgs, Gamma, Path), %HERE
+    findCall(Name, CountArgs, Gamma, Path),
     vArgs(Args, Gamma).
 vInstr(return(Expr), Gamma) :-
     !,vArithExpr(Expr, Gamma).
 vInstr(write(Expr), Gamma) :-
     !,vArithExpr(Expr, Gamma).
 vInstr(read(var(X, Path)), Gamma) :-
-    !,findVar(X, Gamma, Path). %HERE
+    !,findVar(X, Gamma, Path).
 vInstr(var(X, Path) := Expr, Gamma) :-
     !,findVar(X, Gamma, Path),
     vArithExpr(Expr, Gamma).
@@ -384,6 +398,8 @@ findVar(X, [rec(_,_,_) | T], up(Path)) :-
 findVarNumber([], Acc, Acc) :- !.
 findVarNumber([arg(_)|_],Acc, Acc) :- !.
 findVarNumber([rec(_,_,_) | _], Acc, Acc) :- !.
+findVarNumber([proc(_,_,_) | T], Acc, Nr) :-
+    !,findVarNumber(T, Acc, Nr).
 findVarNumber([_|T], Acc, Nr) :-
     !, NewAcc is Acc+1,
     findVarNumber(T, NewAcc, Nr).
@@ -411,8 +427,21 @@ countVars([_|T], Acc, CVars) :-
 countVars(DecList, CVars) :-
     countVars(DecList, 0, CVars).
 
-%TRANSLATING - FIRST STAGE:
+%Translating to extended assembler - we added const(Value) and label(Name) instructions.
+%We introduce 4th register - at 0xFFFF
+%We hold stack pointer at 0xFFFE and frame pointer at 0xFFFD
 
+
+%Activation record:
+%   Arguments...
+%   Return pointer    <- Frame pointer points here.
+%   Old stack pointer
+%   Old frame pointer
+%   Static link
+%   Local variables...
+%Stack is in the end of memory
+
+%ProcMap contains addresses of all visible functions
 tProgram(program(_, VarCount, block(Decs, Instrs)), Code) :-
     tDecs(Decs, DecsCode, [], ProcMap),
     tInstrs(Instrs, InstrsCode, ProcMap),
@@ -422,6 +451,10 @@ tProgram(program(_, VarCount, block(Decs, Instrs)), Code) :-
             const(StartSP),
             store,
             const(0xFFFD),
+            swapa,
+            const(0xFFFC),
+            store,
+            const(0xFFF9),
             swapa,
             const(0xFFFC),
             store,
@@ -647,6 +680,23 @@ tArithExpr(Expr, Code, ProcMap) :-
                   INSTR,
                   store], Code).
 tArithExpr(Expr, Code, ProcMap) :-
+  Expr =.. [-, X], !,
+  tArithExpr(X, XCode, ProcMap),
+  append(XCode, [const(0xFFFE),
+                 swapa,
+                 load,
+                 swapd,
+                 const(1),
+                 swapd,
+                 add,
+                 swapa,
+                 load,
+                 swapd,
+                 const(0xFFFF),
+                 swapd,
+                 mult,
+                 store], Code).
+tArithExpr(Expr, Code, ProcMap) :-
   Expr =.. [mod, L, R], !,
   tArithExpr(L, CL, ProcMap),
   tArithExpr(R, CR, ProcMap),
@@ -761,12 +811,53 @@ tLogicExpr_(Expr, Code, ProcMap) :-
                      swapa,
                      swapd,
                      load], TmpCode1),
-    ( Op = <, !, NextCode = [sub, swapa, const(TrueLab), swapa, branchn]
-    ; Op = >, !, NextCode = [swapd, sub, swapa, const(TrueLab), swapa, branchn]
+    ( Op = <, !, NextCode = [swapa,
+                             const(0xFFFF),
+                             swapa,
+                             store,
+                             swapa,
+                             const(1),
+                             swapd,
+                             swapa,
+                             shift,
+                             const(0xFFFF),
+                             swapa,
+                             swapd,
+                             load,
+                             sub,
+                             swapa,
+                             const(TrueLab),
+                             swapa,
+                             swapd,
+                             const(0xFFFF),
+                             swapd,
+                             shift,
+                             branchn]
+    ; Op = >, !, NextCode = [swapd,
+                             swapa,
+                             const(0xFFFF),
+                             swapa,
+                             store,
+                             swapa,
+                             const(1),
+                             swapd,
+                             swapa,
+                             shift,
+                             const(0xFFFF),
+                             swapa,
+                             swapd,
+                             load,
+                             sub,
+                             swapa,
+                             const(TrueLab),
+                             swapa,
+                             swapd,
+                             const(0xFFFF),
+                             swapd,
+                             shift,
+                             branchn]
     ; Op = =, !, NextCode = [sub, swapa, const(TrueLab), swapa, branchz]
-    ; Op = <=, !, NextCode = [sub, swapa, const(TrueLab), swapa, branchn, branchz]
-    ; Op = >=, !, NextCode = [swapd, sub, swapa, const(TrueLab), swapa, branchn, branchz]
-    ; Op = <>, !, NextCode = [sub, swapa, const(TrueLab), swapa, branchn, swapd, const(-1), mult, branchn]
+    ; Op = <>, !, NextCode = [sub, swapa, const(TrueLab), swapa, branchn, swapd, const(0xFFFF), mult, branchn]
     ),
     append(TmpCode1, NextCode, TmpCode2),
     append(TmpCode2,[const(0xFFFE),
@@ -790,7 +881,7 @@ tLogicExpr_(Expr, Code, ProcMap) :-
                      swapd,
                      add,
                      swapa,
-                     const(1),
+                     const(0xFFFF),
                      store,
                      label(EndLab) ], Code).
 
@@ -809,7 +900,7 @@ getVarAddr(X, Code) :-
 
 
 tCall(upcall(X), Addr, SLCode, Code) :-
-    !, append(SLCode, [swapd, const(0x003), swapd, sub, swapa, load], NewSLCode),
+    !, append(SLCode, [swapd, const(3), swapd, sub, swapa, load], NewSLCode),
     tCall(X, Addr, NewSLCode, Code).
 tCall(Something, Addr, SLCode, Code) :-
     (Something = proc(_, ArgsCount, VarCount) ; Something = rec(_, ArgsCount, VarCount)), !,
@@ -862,6 +953,12 @@ tCall(Something, Addr, SLCode, Code) :-
              sub,
              store, %push end,
              const(0xFFFD),
+             swapa,
+             load,
+             swapd,
+             const(3),
+             swapd,
+             sub,
              swapa,
              load],
     append(CodeTmp, SLCode, CodeTmp2),
@@ -1008,7 +1105,7 @@ test(Filename, MachineCode) :-
     vProgram(AST),
     tProgram(AST, Code),
     write(AST),
-    %writeCode(Code), nl, nl, nl,
+    writeCode(Code), nl, nl, nl,
     translate(Code, MachineCode),
     %writeCode(MachineCode),
     close(Str).
